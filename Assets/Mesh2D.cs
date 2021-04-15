@@ -18,4 +18,6 @@ public class Mesh2D : ScriptableObject
 
     public int VertexCount => vertices.Length;
     public int LineCount => lineIndices.Length;
+
+    //testando
 }
