@@ -1,98 +1,185 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEditor;
-using System.Linq;
+using UnityEngine.UIElements;
 
+[System.Serializable]
+
+[RequireComponent(typeof(MeshFilter))]
+[RequireComponent(typeof(MeshRenderer))]
 public class RoadSegment : MonoBehaviour
 {
-    [SerializeField] Mesh2D shape2D;
+    [Range(.05f, 1.5f)]
+    public float spacing = 1;
+    public float roadWidth = 1;
+    public float tiling = 20;
+    public Transform[] points;
+    public float resolution = 1;
 
-    [Range(2,32)]
-    [SerializeField] int edgeRingCount = 8;
-    [SerializeField] Transform[] controlPoints = new Transform[4];
+    
+    public List<Vector3[]> paths = new List<Vector3[]>();
+    
+    public bool builted = false;
+    public bool updateColider = false;
+    Vector3[] evenPoints;
 
-    Vector3 GetPos (int i) => controlPoints[i].position;
-    Mesh mesh;
 
-    void Awake(){
-        mesh = new Mesh();
-        mesh.name = "Segment";
-
-        GetComponent<MeshFilter>().sharedMesh = mesh;
-    }
-
-    public void setControlPoints(int i, Vector3 pos){
-        controlPoints[i].position = pos;
-    }
-
-    void Update() => GenerateMesh();
-
-    void GenerateMesh()
+    private void Update()
     {
-        mesh.Clear();
-
-        // Vertices
-        List<Vector3> verts = new List<Vector3>();
-        List<Vector3> normals = new List<Vector3>();
-
-        for( int ring = 0; ring < edgeRingCount; ring++){
-            float t = ring / (edgeRingCount-1f);
-            OrientedPoint op = GetBezierOP(t);
-            for( int i = 0; i < shape2D.VertexCount; i++){
-                verts.Add(op.LocalToWorldPos(shape2D.vertices[i].point));
-                normals.Add(op.LocalToWorldVec(shape2D.vertices[i].normal));
-            }
-        }
-
-        // Triangles
-        List<int> triIndices = new List<int>();
-        for( int ring = 0; ring < edgeRingCount-1; ring++){
-            int rootIndex = ring * shape2D.VertexCount;
-            int rootIndexNext = (ring+1) * shape2D.VertexCount;
-
-            for( int line = 0; line < shape2D.LineCount; line+=2){
-                int lineIndexA = shape2D.lineIndices[line];
-                int lineIndexB = shape2D.lineIndices[line+1];
-
-                int currentA = rootIndex + lineIndexA;
-                int currentB = rootIndex + lineIndexB;
-
-                int nextA = rootIndexNext + lineIndexA;
-                int nextB = rootIndexNext + lineIndexB;
-
-                triIndices.Add(currentA);
-                triIndices.Add(nextA);
-                triIndices.Add(nextB);
-
-                triIndices.Add(currentA);
-                triIndices.Add(nextB);
-                triIndices.Add(currentB);
-            }
-        }
-
-        mesh.SetVertices(verts);
-        mesh.SetNormals(normals);
-        mesh.SetTriangles(triIndices, 0);
-
+        if(!builted)
+            UpdateRoad();
+        
     }
 
-    OrientedPoint GetBezierOP(float t){
-        Vector3 p0 = GetPos(0);
-        Vector3 p1 = GetPos(1);
-        Vector3 p2 = GetPos(2);
-        Vector3 p3 = GetPos(3);
+    public void UpdateRoad()
+    {
+        
+       
 
-        Vector3 a = Vector3.Lerp( p0, p1, t );
-        Vector3 b = Vector3.Lerp( p1, p2, t );
-        Vector3 c = Vector3.Lerp( p2, p3, t );
+        evenPoints = CalculateEvenlySpacedPoints(spacing);       
+        Mesh mesh = CreateRoadMesh(evenPoints, false);
+        GetComponent<MeshFilter>().mesh = mesh;
 
-        Vector3 d = Vector3.Lerp( a, b, t);
-        Vector3 e = Vector3.Lerp( b, c, t);
+        
+        int textureRepeat = Mathf.RoundToInt(tiling * evenPoints.Length * spacing * .05f);
+        GetComponent<MeshRenderer>().sharedMaterial.mainTextureScale = new Vector3(1, textureRepeat);
+        if (updateColider)
+        {
+           
+            MeshCollider col = gameObject.GetComponent<MeshCollider>();
+            col.sharedMesh = mesh;
+            col.enabled = true;
+            updateColider = false;
+            builted = true;
+        }
+    }
+    Vector3 closestPoint;
+    public Vector3 GetClosestPoint(Vector3 from, Vector3[] path)
+    {               
+        for (int i = 0; i < path.Length; i++)
+        {
 
-        Vector3 pos = Vector3.Lerp( d, e, t);
-        Vector3 tangent = (e - d).normalized;
+            if(Vector3.Distance(from, path[i]) < Vector3.Distance(closestPoint, from))
+            {
+                closestPoint = path[i];
+              
+            }
+           
+        }
+       
+        return closestPoint;
+    }
+    
+    Mesh CreateRoadMesh(Vector3[] points, bool isClosed)
+    {
+        Vector3[] verts = new Vector3[points.Length * 2];
+                
+        Vector3[] path0 = new Vector3[points.Length];
+        Vector3[] path1 = new Vector3[points.Length];
+        Vector3[] path2 = new Vector3[points.Length];
 
-        return new OrientedPoint(pos, tangent);
+        Vector2[] uvs = new Vector2[verts.Length];
+        int numTris = 2 * (points.Length - 1) + ((isClosed) ? 2 : 0);
+        int[] tris = new int[numTris * 3];
+        int vertIndex = 0;
+        int triIndex = 0;
+
+        for (int i = 0; i < points.Length; i++)
+        {
+            Vector3 forward = Vector3.zero;
+            if (i < points.Length - 1 || isClosed)
+            {
+                forward = points[(i + 1) % points.Length] - points[i];
+            }
+           
+
+            forward.Normalize();
+            
+            Vector3 left = new Vector3(-forward.z, forward.y, forward.x);
+
+           
+                verts[vertIndex] = points[i] + left * roadWidth * .5f;
+                verts[vertIndex + 1] = points[i] - left * roadWidth * .5f;
+           
+            //aqui
+            //GameObject GO = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            //GO.transform.position = points[i] + left * roadWidth * .5f;
+
+            path0[i] = points[i] - left * roadWidth * .1f;
+            path1[i] = points[i];
+            path2[i] = points[i] - left * roadWidth;
+
+
+            float completionPercent = i / (float)(points.Length - 1);
+            float v = 1 - Mathf.Abs(2 * completionPercent - 1);
+            uvs[vertIndex] = new Vector3(0, v);
+            uvs[vertIndex + 1] = new Vector2(1, v);
+
+            if (i < points.Length - 1 || isClosed)
+            {
+                tris[triIndex] = vertIndex;
+                tris[triIndex + 1] = (vertIndex + 2) % verts.Length;
+                tris[triIndex + 2] = vertIndex + 1;
+
+                tris[triIndex + 3] = vertIndex + 1;
+                tris[triIndex + 4] = (vertIndex + 2) % verts.Length;
+                tris[triIndex + 5] = (vertIndex + 3) % verts.Length;
+            }
+
+            vertIndex += 2;
+            triIndex += 6;
+        }
+
+        Mesh mesh = new Mesh();
+        mesh.vertices = verts;
+        mesh.triangles = tris;
+        mesh.uv = uvs;
+
+        if (updateColider)
+        {
+            paths.Clear();
+            paths.Add(path0);
+            paths.Add(path1);
+            paths.Add(path2);
+        }
+        return mesh;
+    }
+
+    public Vector3[] CalculateEvenlySpacedPoints(float spacing, float resolution = 1)
+    {
+        List<Vector3> evenlySpacedPoints = new List<Vector3>();
+       
+        evenlySpacedPoints.Add(points[0].position);
+        Vector3 previousPoint = points[0].position;
+        float dstSinceLastEvenPoint = 0;
+
+
+        float controlNetLength = Vector3.Distance(points[0].position, points[1].position) + Vector3.Distance(points[1].position,
+            points[2].position) + Vector3.Distance(points[2].position, points[3].position);
+            float estimatedCurveLength = Vector3.Distance(points[0].position, points[3].position) + controlNetLength / 2f;
+            int divisions = Mathf.CeilToInt(estimatedCurveLength * resolution * 10);
+            float t = 0;
+            while (t <= 1)
+            {
+                t += 1f / divisions;
+                Vector3 pointOnCurve = Bezier.EvaluateCubic(points[0].position, points[1].position, points[2].position, points[3].position, t);
+                dstSinceLastEvenPoint += Vector3.Distance(previousPoint, pointOnCurve);
+
+                while (dstSinceLastEvenPoint >= spacing)
+                {
+                    float overshootDst = dstSinceLastEvenPoint - spacing;
+                    Vector3 newEvenlySpacedPoint = pointOnCurve + (previousPoint - pointOnCurve).normalized * overshootDst;
+                    evenlySpacedPoints.Add(newEvenlySpacedPoint);
+                    dstSinceLastEvenPoint = overshootDst;
+                    previousPoint = newEvenlySpacedPoint;
+                }
+
+                previousPoint = pointOnCurve;
+            }
+        
+
+        return evenlySpacedPoints.ToArray();
     }
 }
